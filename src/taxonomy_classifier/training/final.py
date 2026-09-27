@@ -6,8 +6,9 @@ from typing import TYPE_CHECKING, Any, Final
 import optuna
 
 from taxonomy_classifier.data.files import write_text_atomic
-from taxonomy_classifier.exceptions import DataError, TrainingDeadlineError
+from taxonomy_classifier.exceptions import DataError, TrainingDeadlineError, TrainingResumeError
 from taxonomy_classifier.model.classifier import build_classifier, parameter_counts
+from taxonomy_classifier.model.labels import LabelSpace
 from taxonomy_classifier.training.data import with_validation_subset
 from taxonomy_classifier.training.report import OVERALL, classification_report
 from taxonomy_classifier.training.search import SearchConfig, TrialSetup, suggest_setup
@@ -28,7 +29,6 @@ if TYPE_CHECKING:
 
     import torch
 
-    from taxonomy_classifier.model.labels import LabelSpace
     from taxonomy_classifier.training.data import TrainingData
     from taxonomy_classifier.training.report import LevelReport
     from taxonomy_classifier.training.trainer import TrainingMonitor
@@ -202,7 +202,17 @@ def train_final(
     description = _describe(choice, setup, parameter_counts(model))
 
     output_dir.mkdir(parents=True, exist_ok=True)
-    write_text_atomic(output_dir / LABEL_SPACE_FILENAME, label_space.to_json())
+    saved_space = output_dir / LABEL_SPACE_FILENAME
+
+    if (
+        resume
+        and saved_space.exists()
+        and LabelSpace.from_json(saved_space.read_text(encoding="utf-8")) != label_space
+    ):
+        msg = f"Cannot resume in {output_dir}: its label space differs from the current one"
+        raise TrainingResumeError(msg)
+
+    write_text_atomic(saved_space, label_space.to_json())
     write_text_atomic(output_dir / RUN_FILENAME, json.dumps(description, indent=2, default=str))
 
     inner = monitor or SilentMonitor()

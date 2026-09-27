@@ -7,7 +7,7 @@ import polars as pl
 import pytest
 import torch
 
-from taxonomy_classifier.exceptions import DataError, TrainingDeadlineError
+from taxonomy_classifier.exceptions import DataError, TrainingDeadlineError, TrainingResumeError
 from taxonomy_classifier.model.encoders import CnnConfig, TransformerConfig
 from taxonomy_classifier.model.labels import LEVELS, LabelSpace
 from taxonomy_classifier.training.data import LabeledSet, SequenceBank, TrainingData
@@ -390,3 +390,21 @@ def test_deadline_monitor_skips_an_epoch_that_would_not_fit() -> None:
         monitor.epoch_started(2, 3, 4)
 
     assert inner.calls == ["epoch_started 1/3 4", "epoch_finished 1"]
+
+
+def test_resume_refuses_a_different_label_space(tmp_path: Path) -> None:
+    (tmp_path / LABEL_SPACE_FILENAME).write_text(
+        LabelSpace(classes=dict.fromkeys(LEVELS, ("x", "y")), min_count=1).to_json(),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(TrainingResumeError, match="label space differs"):
+        train_final(
+            SearchChoice(trial=12, params=CNN_PARAMS),
+            DATA,
+            SPACE,
+            config=TINY_FINAL,
+            output_dir=tmp_path,
+            device=CPU,
+            resume=True,
+        )

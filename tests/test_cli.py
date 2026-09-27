@@ -1,5 +1,6 @@
 from dataclasses import replace
 import json
+import logging
 import runpy
 import sys
 import time
@@ -310,8 +311,9 @@ def test_train_skips_the_marker_tables_without_markers(
     load = setup.load_training_data
 
     def without_markers(
-        layout: DataLayout, *, min_class_count: int
+        layout: DataLayout, *, min_class_count: int, label_space: LabelSpace | None = None
     ) -> tuple[LabelSpace, TrainingData]:
+        del label_space
         label_space, data = load(layout, min_class_count=min_class_count)
 
         return label_space, replace(data, validation_markers=())
@@ -363,6 +365,22 @@ def test_train_resumes_from_its_output_directory(
     assert cli.main([*first, "--resume"]) == 0
     assert "Epoch" not in capsys.readouterr().out
     assert json.loads((tmp_path / "final" / "steps.json").read_text(encoding="utf-8")) == steps
+
+
+def test_resuming_reuses_the_saved_label_space(
+    built_layout: DataLayout, tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    caplog.set_level(logging.INFO)
+    arguments = [*_train_arguments(built_layout, tmp_path, "--epochs", "1"), "--resume"]
+    saved = tmp_path / "final" / "label_space.json"
+
+    assert cli.main(arguments) == 0
+
+    original = saved.read_text(encoding="utf-8")
+
+    assert cli.main([*arguments[:-1], "--min-class-count", "2", "--resume"]) == 0
+    assert "Resuming with the label space saved in" in caplog.text
+    assert saved.read_text(encoding="utf-8") == original
 
 
 def test_train_stops_cleanly_at_its_time_budget(

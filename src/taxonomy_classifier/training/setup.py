@@ -25,12 +25,12 @@ def label_space_path(layout: DataLayout) -> Path:
 
 
 def load_training_data(
-    layout: DataLayout, *, min_class_count: int
+    layout: DataLayout, *, min_class_count: int, label_space: LabelSpace | None = None
 ) -> tuple[LabelSpace, TrainingData]:
     train = training_frame(layout.dataset_path, layout.synthetic_path)
     validation = pl.scan_parquet(layout.dataset_path).filter(pl.col("split") == Split.VAL.value)
 
-    label_space = LabelSpace.from_frame(
+    label_space = label_space or LabelSpace.from_frame(
         train.filter(~pl.col("synthetic")), min_count=min_class_count
     )
     write_text_atomic(label_space_path(layout), label_space.to_json())

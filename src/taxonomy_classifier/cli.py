@@ -14,12 +14,13 @@ from taxonomy_classifier.data.entrez import fetch_query
 from taxonomy_classifier.data.sources.base import QueriedBundle, expected_filenames
 from taxonomy_classifier.data.sources.registry import DEFAULT_SOURCES, DEFAULT_TAXONOMIES
 from taxonomy_classifier.exceptions import DataError, GeneflowError, TrainingDeadlineError
+from taxonomy_classifier.model.labels import LabelSpace
 from taxonomy_classifier.training.final import FinalConfig, load_search_choice, train_final
 from taxonomy_classifier.training.oversampling import OversamplingConfig, oversample_train
 from taxonomy_classifier.training.progress import ProgressBarMonitor
 from taxonomy_classifier.training.report import OVERALL, format_group_summary, format_report
 from taxonomy_classifier.training.search import SUGGESTERS, SearchConfig, run_search
-from taxonomy_classifier.training.setup import load_training_data
+from taxonomy_classifier.training.setup import LABEL_SPACE_FILENAME, load_training_data
 from taxonomy_classifier.training.trainer import LoggingMonitor, Precision
 
 if TYPE_CHECKING:
@@ -256,13 +257,24 @@ def _train(args: argparse.Namespace, layout: DataLayout) -> None:
     name = f"{choice.architecture.lower()}-trial{choice.trial}"
     output: Path = args.output or Path("checkpoints") / name
     device = _device(args)
+    resume: bool = args.resume
+    saved_space = output / LABEL_SPACE_FILENAME
+    fixed_space = (
+        LabelSpace.from_json(saved_space.read_text(encoding="utf-8"))
+        if resume and saved_space.exists()
+        else None
+    )
 
-    label_space, data = load_training_data(layout, min_class_count=args.min_class_count)
+    if fixed_space is not None:
+        _LOGGER.info("Resuming with the label space saved in %s", saved_space)
+
+    label_space, data = load_training_data(
+        layout, min_class_count=args.min_class_count, label_space=fixed_space
+    )
 
     _LOGGER.info("Training %s from %s: %s", name, args.params, choice.params)
 
     steps_path = output / "steps.json"
-    resume: bool = args.resume
     previous_steps = (
         json.loads(steps_path.read_text(encoding="utf-8")) if resume and steps_path.exists() else []
     )
