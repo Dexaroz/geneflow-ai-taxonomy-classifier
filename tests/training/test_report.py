@@ -120,3 +120,14 @@ def test_group_summary_can_show_another_metric() -> None:
     summary = format_group_summary({OVERALL: _reports()}, metric="macro_f1")
 
     assert summary.splitlines()[2].split()[LEVELS.index("genus") + 1] == f"{(2 / 3 + 0.5) / 3:.4f}"
+
+
+def test_an_empty_split_reports_no_metrics() -> None:
+    empty = _data().take([])
+
+    grouped = classification_report(
+        cast("TaxonomyClassifier", FixedModel()), empty, SPACE, batch_size=8, device=CPU
+    )
+
+    assert all(math.isnan(level.accuracy) for level in grouped[OVERALL])
+    assert all(level.support == 0 for level in grouped[OVERALL])

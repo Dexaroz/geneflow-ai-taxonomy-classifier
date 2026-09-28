@@ -383,6 +383,39 @@ def test_resuming_reuses_the_saved_label_space(
     assert saved.read_text(encoding="utf-8") == original
 
 
+def test_evaluate_reports_a_trained_model_on_a_split(
+    built_layout: DataLayout, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    assert cli.main(_train_arguments(built_layout, tmp_path, "--epochs", "1")) == 0
+
+    capsys.readouterr()
+    model_dir = tmp_path / "final"
+    arguments = ["evaluate", "--data-dir", str(built_layout.root), "--model-dir", str(model_dir)]
+
+    assert cli.main([*arguments, "--split", "val", "--precision", "fp32"]) == 0
+
+    output = capsys.readouterr().out
+    written = json.loads((model_dir / "evaluation_val.json").read_text(encoding="utf-8"))
+
+    assert "Classification report on val, epoch 1" in output
+    assert "Accuracy by marker" in output
+    assert written["split"] == "val"
+    assert written["epoch"] == 1
+    assert [level["level"] for level in written["overall"]][-1] == "species"
+    assert set(written["markers"]) <= {"ssu", "coi", "its", "rbcl", "matk"}
+
+
+def test_evaluate_rejects_a_directory_without_a_model(
+    built_layout: DataLayout, tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    exit_code = cli.main(
+        ["evaluate", "--data-dir", str(built_layout.root), "--model-dir", str(tmp_path)]
+    )
+
+    assert exit_code == 1
+    assert "is not a trained model directory" in caplog.text
+
+
 def test_train_stops_cleanly_at_its_time_budget(
     built_layout: DataLayout, tmp_path: Path, caplog: pytest.LogCaptureFixture
 ) -> None:

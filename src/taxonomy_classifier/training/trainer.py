@@ -253,6 +253,9 @@ def predict_batches(
     model.eval()
     order = torch.argsort(data.bank.lengths, stable=True)
 
+    if not len(order):
+        return
+
     with torch.inference_mode(), _autocast(device, precision):
         batches = iterate_batches(
             data,

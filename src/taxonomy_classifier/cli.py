@@ -13,22 +13,30 @@ from taxonomy_classifier.data.download import download_all
 from taxonomy_classifier.data.entrez import fetch_query
 from taxonomy_classifier.data.sources.base import QueriedBundle, expected_filenames
 from taxonomy_classifier.data.sources.registry import DEFAULT_SOURCES, DEFAULT_TAXONOMIES
+from taxonomy_classifier.data.split import Split
 from taxonomy_classifier.exceptions import DataError, GeneflowError, TrainingDeadlineError
 from taxonomy_classifier.model.labels import LabelSpace
-from taxonomy_classifier.training.final import FinalConfig, load_search_choice, train_final
+from taxonomy_classifier.training.evaluation import evaluate_split, evaluation_path
+from taxonomy_classifier.training.final import (
+    RUN_FILENAME,
+    FinalConfig,
+    load_search_choice,
+    train_final,
+)
 from taxonomy_classifier.training.oversampling import OversamplingConfig, oversample_train
 from taxonomy_classifier.training.progress import ProgressBarMonitor
 from taxonomy_classifier.training.report import OVERALL, format_group_summary, format_report
 from taxonomy_classifier.training.search import SUGGESTERS, SearchConfig, run_search
 from taxonomy_classifier.training.setup import LABEL_SPACE_FILENAME, load_training_data
-from taxonomy_classifier.training.trainer import LoggingMonitor, Precision
+from taxonomy_classifier.training.trainer import BEST_CHECKPOINT, LoggingMonitor, Precision
 
 if TYPE_CHECKING:
-    from collections.abc import Sequence
+    from collections.abc import Mapping, Sequence
 
     import optuna
 
     from taxonomy_classifier.data.sources.base import DataSource, RemoteBundle, TaxonomySource
+    from taxonomy_classifier.training.report import LevelReport
 
 _LOGGER: Final = logging.getLogger(__name__)
 
@@ -44,6 +52,7 @@ _COMMANDS: Final = {
     "cache": "Write the label space and the encoded sequence caches used for training",
     "search": "Run a hyperparameter search for one architecture",
     "train": "Train one configuration chosen by a hyperparameter search",
+    "evaluate": "Evaluate a trained model on one split, overall and per marker",
 }
 
 
@@ -63,7 +72,7 @@ def build_parser() -> argparse.ArgumentParser:
         if name in {"cache", "search", "train"}:
             command.add_argument("--min-class-count", type=int, default=3)
 
-        if name in {"search", "train"}:
+        if name in {"search", "train", "evaluate"}:
             _add_device_arguments(command)
 
         if name == "search":
@@ -71,6 +80,9 @@ def build_parser() -> argparse.ArgumentParser:
 
         if name == "train":
             _add_train_arguments(command)
+
+        if name == "evaluate":
+            _add_evaluate_arguments(command)
 
     return parser
 
@@ -118,6 +130,14 @@ def _add_train_arguments(command: argparse.ArgumentParser) -> None:
     command.add_argument("--log-every", type=int, default=500)
     command.add_argument("--refresh-seconds", type=float, default=0.5)
     command.add_argument("--resume", action="store_true")
+
+
+def _add_evaluate_arguments(command: argparse.ArgumentParser) -> None:
+    command.add_argument("--model-dir", type=Path, required=True)
+    command.add_argument(
+        "--split", choices=[split.value for split in Split], default=Split.TEST.value
+    )
+    command.add_argument("--batch-size", type=int, default=256)
 
 
 def _add_device_arguments(command: argparse.ArgumentParser) -> None:
@@ -178,6 +198,9 @@ def _run(
 
     if command == "train":
         _train(args, layout)
+
+    if command == "evaluate":
+        _evaluate(args, layout)
 
 
 def _search(args: argparse.Namespace, layout: DataLayout) -> None:
@@ -314,13 +337,57 @@ def _train(args: argparse.Namespace, layout: DataLayout) -> None:
 
     best = min(result.history, key=lambda record: record.validation.loss)
 
-    sys.stdout.write(
-        f"Classification report on validation, best epoch {best.epoch}/{len(result.history)}\n\n"
-        f"{format_report(result.reports)}\n\n"
+    _write_reports(
+        f"Classification report on validation, best epoch {best.epoch}/{len(result.history)}",
+        result.reports,
+        result.marker_reports,
     )
 
-    if result.marker_reports:
-        grouped = {OVERALL: result.reports, **result.marker_reports}
+    _LOGGER.info("%s finished; checkpoints and reports in %s", name, output)
+
+
+def _evaluate(args: argparse.Namespace, layout: DataLayout) -> None:
+    _require_dataset(layout)
+
+    model_dir: Path = args.model_dir
+    split = Split(args.split)
+    missing = [
+        name
+        for name in (RUN_FILENAME, LABEL_SPACE_FILENAME, BEST_CHECKPOINT)
+        if not (model_dir / name).exists()
+    ]
+
+    if missing:
+        msg = f"{model_dir} is not a trained model directory; missing {missing}"
+        raise DataError(msg)
+
+    result = evaluate_split(
+        model_dir,
+        layout,
+        split,
+        device=_device(args),
+        batch_size=args.batch_size,
+        precision=Precision(args.precision),
+    )
+
+    _write_reports(
+        f"Classification report on {split.value}, epoch {result.epoch}",
+        result.reports,
+        result.marker_reports,
+    )
+
+    _LOGGER.info("Wrote %s", evaluation_path(model_dir, split))
+
+
+def _write_reports(
+    title: str,
+    reports: Sequence[LevelReport],
+    marker_reports: Mapping[str, Sequence[LevelReport]],
+) -> None:
+    sys.stdout.write(f"{title}\n\n{format_report(reports)}\n\n")
+
+    if marker_reports:
+        grouped = {OVERALL: reports, **marker_reports}
 
         sys.stdout.write(
             f"Accuracy by marker\n\n{format_group_summary(grouped)}\n\n"
@@ -328,8 +395,6 @@ def _train(args: argparse.Namespace, layout: DataLayout) -> None:
         )
 
     sys.stdout.flush()
-
-    _LOGGER.info("%s finished; checkpoints and reports in %s", name, output)
 
 
 def _device(args: argparse.Namespace) -> torch.device:
