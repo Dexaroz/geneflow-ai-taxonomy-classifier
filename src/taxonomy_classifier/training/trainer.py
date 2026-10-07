@@ -39,6 +39,8 @@ STATE_FILENAME: Final = "state.pt"
 
 _RESUME_IGNORED: Final = frozenset({"log_every"})
 
+_RESUME_EXTENDABLE: Final = "epochs"
+
 _MATRIX_NDIM: Final = 2
 
 
@@ -595,9 +597,7 @@ def _restore(
 ) -> tuple[list[EpochRecord], float]:
     state: dict[str, Any] = torch.load(state_path, map_location="cpu", weights_only=True)
 
-    if state["config"] != _resumable(config):
-        msg = f"Cannot resume from {state_path}: it was trained with another configuration"
-        raise TrainingResumeError(msg)
+    _check_resumable(state["config"], config, state_path)
 
     load_weights(model, state_path.with_name(LAST_CHECKPOINT), device=device)
     optimization.optimizer.load_state_dict(state["optimizer"])
@@ -620,6 +620,27 @@ def _resumable(config: TrainingConfig) -> dict[str, Any]:
     plain: dict[str, Any] = json.loads(json.dumps(asdict(config)))
 
     return {name: value for name, value in plain.items() if name not in _RESUME_IGNORED}
+
+
+def _check_resumable(saved: Mapping[str, Any], config: TrainingConfig, state_path: Path) -> None:
+    current = _resumable(config)
+
+    if _without_epochs(saved) != _without_epochs(current):
+        msg = f"Cannot resume from {state_path}: it was trained with another configuration"
+        raise TrainingResumeError(msg)
+
+    scheduled = int(saved[_RESUME_EXTENDABLE])
+
+    if config.epochs < scheduled:
+        msg = (
+            f"Cannot resume from {state_path}: its schedule spans {scheduled} epochs, "
+            f"more than the {config.epochs} requested"
+        )
+        raise TrainingResumeError(msg)
+
+
+def _without_epochs(plain: Mapping[str, Any]) -> dict[str, Any]:
+    return {name: value for name, value in plain.items() if name != _RESUME_EXTENDABLE}
 
 
 def _optimizer(model: TaxonomyClassifier, config: TrainingConfig) -> torch.optim.AdamW:

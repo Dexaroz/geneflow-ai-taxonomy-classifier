@@ -406,6 +406,52 @@ def test_resume_without_a_saved_state_starts_from_scratch(tmp_path: Path) -> Non
     assert (tmp_path / STATE_FILENAME).exists()
 
 
+def test_resume_extends_the_schedule_to_more_epochs(tmp_path: Path) -> None:
+    short = train_classifier(
+        build_classifier(TINY_CNN, SPACE),
+        DATA,
+        config=replace(CONFIG, epochs=2),
+        checkpoint_dir=tmp_path,
+        device=CPU,
+    )
+    monitor = _RecordingMonitor()
+
+    history = train_classifier(
+        build_classifier(TINY_CNN, SPACE),
+        DATA,
+        config=replace(CONFIG, epochs=5),
+        checkpoint_dir=tmp_path,
+        device=CPU,
+        monitor=monitor,
+        resume=True,
+    )
+
+    assert [record.epoch for record in monitor.records] == [3, 4, 5]
+    assert [record.epoch for record in history] == [1, 2, 3, 4, 5]
+    assert history[2].learning_rate > short[-1].learning_rate
+    assert history[-1].learning_rate < history[2].learning_rate
+
+
+def test_resume_refuses_a_shorter_schedule(tmp_path: Path) -> None:
+    train_classifier(
+        build_classifier(TINY_CNN, SPACE),
+        DATA,
+        config=replace(CONFIG, epochs=3),
+        checkpoint_dir=tmp_path,
+        device=CPU,
+    )
+
+    with pytest.raises(TrainingResumeError, match="spans 3 epochs"):
+        train_classifier(
+            build_classifier(TINY_CNN, SPACE),
+            DATA,
+            config=replace(CONFIG, epochs=2),
+            checkpoint_dir=tmp_path,
+            device=CPU,
+            resume=True,
+        )
+
+
 def test_resume_refuses_a_different_configuration(tmp_path: Path) -> None:
     train_classifier(
         build_classifier(TINY_CNN, SPACE),
