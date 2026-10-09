@@ -28,7 +28,7 @@ class LengthRange:
 
 MARKER_LENGTHS: Final = {
     Marker.COI: LengthRange(min_length=400, max_length=2500),
-    Marker.ITS: LengthRange(min_length=300, max_length=1500),
+    Marker.ITS: LengthRange(min_length=200, max_length=1500),
     Marker.RBCL: LengthRange(min_length=400, max_length=1600),
-    Marker.MATK: LengthRange(min_length=400, max_length=1800),
+    Marker.MATK: LengthRange(min_length=400, max_length=2500),
 }
